@@ -1,4 +1,6 @@
-﻿using System.Net;
+﻿using System.Collections.Concurrent;
+using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace SysProg_18764;
@@ -7,6 +9,8 @@ public sealed class HttpServer : IHttpServer
 {
     private long requestCount = 0;
     private readonly HttpListener _httpListener = new HttpListener();
+    private readonly ConcurrentDictionary<string, byte[]> _cd = new ConcurrentDictionary<string, byte[]>();
+
     public void AddURI(string uri)
     {
         try
@@ -106,7 +110,7 @@ public sealed class HttpServer : IHttpServer
         Console.WriteLine();
     }
 
-    public void Start()
+    public async Task Start()
     {
         string basePath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\..\Files"));
 
@@ -115,6 +119,8 @@ public sealed class HttpServer : IHttpServer
             Console.WriteLine("Direktorijum ne postoji ili je prazan.");
             return;
         }
+
+        AddURI("http://localhost:8080/");
 
         try
         {
@@ -131,46 +137,74 @@ public sealed class HttpServer : IHttpServer
             Console.WriteLine("Error message: {0}", e.Message);
         }
 
+        basePath += "\\";
+
         while (true)
         {
-            // GetContext method blocks while waiting for a request.
-            HttpListenerContext context = _httpListener.GetContext();
-            HttpListenerRequest request = context.Request;
-
-            ShowRequestData(request);
-
-            string? rawUrl = request.RawUrl;
-            string[] filePaths;
-            if (rawUrl != null)
-            {
-                int index = rawUrl.IndexOf('/');
-                if (index >= 0)
-                {
-                    rawUrl = rawUrl.Substring(0, index) + rawUrl.Substring(index + 1);
-                }
-                filePaths = rawUrl.Split('/');
-
-                for (int i = 0; i < filePaths.Length; i++)
-                {
-                    Console.WriteLine(filePaths[i]);
-                    filePaths[i] = "\\" + filePaths[i];
-                    Console.WriteLine(filePaths[i]);
-
-                    if (File.Exists(basePath + filePaths[i]))
-                    {
-                        Console.WriteLine($"File {basePath + filePaths[i]} exists in the directory. Caching it for further requests.\n");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"File {basePath + filePaths[i]} does not exist in the directory.\n");
-                    }
-                }
-            }
+            HttpListenerContext context = await _httpListener.GetContextAsync();
+            await Task.Run(() => HandleRequest(context, basePath));
         }
     }
 
     public void Stop()
     {
         _httpListener?.Stop();
+    }
+
+    public void HandleRequest(HttpListenerContext context, string basePath)
+    {
+        ThreadPool.QueueUserWorkItem((state) =>
+        {
+            HttpListenerRequest request = context.Request;
+            HttpListenerResponse response = context.Response;
+            ShowRequestData(request);
+            try
+            {
+                string filename = request.RawUrl!.Substring(1);
+
+                string filepath = Path.Combine(basePath, filename);
+                if (File.Exists(filepath))
+                {
+                    byte[] encryptedBytes = EncryptFile(filepath);
+
+                    response.StatusCode = (int)HttpStatusCode.OK;
+                    response.ContentType = "application/octet-stream";
+                    response.ContentLength64 = encryptedBytes.Length;
+                    response.OutputStream.Write(encryptedBytes, 0, encryptedBytes.Length);
+                    response.OutputStream.Close();
+                    Console.WriteLine($"{filename} encrypted.");
+                }
+                else
+                {
+                    response.StatusCode = (int)HttpStatusCode.NotFound;
+                    response.OutputStream.Close();
+                    Console.WriteLine($"{filename} doesn't exist.");
+                }
+            }
+            catch (Exception ex)
+            {
+                response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                response.OutputStream.Close();
+                Console.WriteLine($"Error while processing request: {ex.Message}");
+            }
+            finally
+            {
+                response.Close();
+            }
+        });
+    }
+
+    public byte[] EncryptFile(string filepath)
+    {
+
+        byte[] fileBytes = File.ReadAllBytes(filepath);
+
+        byte[] encryptedBytes;
+        using (SHA256 sha256 = SHA256.Create())
+        {
+            encryptedBytes = sha256.ComputeHash(fileBytes);
+        }
+
+        return encryptedBytes;
     }
 }

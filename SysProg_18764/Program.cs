@@ -37,81 +37,39 @@ class Program
                     string[] tokens = request.Split(' ');
                     string fileName = tokens[1].TrimStart('/');
 
-                    if (fileName.Contains("_enc"))
+                    byte[] cachedFile;
+                    lock (cacheLock)
                     {
-                        byte[] cachedFile;
-                        lock (cacheLock)
-                        {
-                            fileCache.TryGet(fileName, out cachedFile);
-                        }
+                        fileCache.TryGet(fileName, out cachedFile);
+                    }
 
-                        if (cachedFile != null)
+                    if (cachedFile != null)
+                    {
+                        var thread = new Thread(() =>
                         {
-                            var thread = new Thread(() =>
+                            SendResponse(writer, cachedFile, "application/octet-stream");
+                        });
+                        thread.Start();
+                        thread.Join();
+                    }
+                    else if (File.Exists(fileName))
+                    {
+                        byte[] fileData = File.ReadAllBytes(fileName);
+                        var thread = new Thread(() =>
+                        {
+                            byte[] hashFile = GenerateHash(fileData);
+                            lock (cacheLock)
                             {
-                                byte[] hashFile = GenerateHash(cachedFile);
-                                SendResponse(writer, hashFile, "application/octet-stream");
-                            });
-                            thread.Start();
-                            thread.Join();
-                        }
-                        else if (File.Exists(fileName))
-                        {
-                            byte[] fileData = File.ReadAllBytes(fileName);
-                            var thread = new Thread(() =>
-                            {
-                                byte[] hashData = GenerateHash(fileData);
-                                lock (cacheLock)
-                                {
-                                    fileCache[fileName] = hashData;
-                                }
-                                SendResponse(writer, hashData, "application/octet-stream");
-                            });
-                            thread.Start();
-                            thread.Join();
-                        }
-                        else
-                        {
-                            SendErrorResponse(writer, "File not found");
-                        }
+                                fileCache[fileName] = hashFile;
+                            }
+                            SendResponse(writer, hashFile, "application/octet-stream");
+                        });
+                        thread.Start();
+                        thread.Join();
                     }
                     else
                     {
-                        byte[] cachedFile;
-                        lock (cacheLock)
-                        {
-                            fileCache.TryGet(fileName, out cachedFile);
-                        }
-
-                        if (cachedFile != null)
-                        {
-                            var thread = new Thread(() =>
-                            {
-                                byte[] hashFile = GenerateHash(cachedFile);
-                                SendResponse(writer, hashFile, "application/octet-stream");
-                            });
-                            thread.Start();
-                            thread.Join();
-                        }
-                        else if (File.Exists(fileName))
-                        {
-                            byte[] fileData = File.ReadAllBytes(fileName);
-                            var thread = new Thread(() =>
-                            {
-                                byte[] hashFile = GenerateHash(fileData);
-                                lock (cacheLock)
-                                {
-                                    fileCache[fileName] = hashFile;
-                                }
-                                SendResponse(writer, hashFile, "application/octet-stream");
-                            });
-                            thread.Start();
-                            thread.Join();
-                        }
-                        else
-                        {
-                            SendErrorResponse(writer, "File not found");
-                        }
+                        SendErrorResponse(writer, "File not found");
                     }
                 }
                 else
